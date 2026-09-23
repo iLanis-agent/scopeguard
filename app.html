@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScopeGuard - price the creep before it eats the project</title>
+<style>
+  :root { --ink:#252a30; --muted:#707a85; --accent:#41606d; --accent-dk:#324b55; --card:#ffffff; --bg:#f4f7f8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+  .wrap { max-width:680px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:28px; margin:0 0 6px; }
+  .tag { color:var(--muted); margin:0 0 20px; line-height:1.45; }
+  .card { background:var(--card); border:1px solid #d9e2e6; border-radius:14px; padding:18px; margin-bottom:14px; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+  input { padding:9px 10px; border:1px solid #c6d3d9; border-radius:8px; font-size:15px; background:#fff; }
+  input[type=text] { width:170px; }
+  input[type=number] { width:110px; }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-size:15px; cursor:pointer; }
+  button:hover { background:var(--accent-dk); }
+  button.ghost { background:#e3ecef; color:var(--ink); }
+  button.ghost:hover { background:#d3e0e4; }
+  .hero { text-align:center; }
+  .pill { display:inline-block; padding:4px 14px; border-radius:999px; font-size:13px; font-weight:700; }
+  .pill.healthy { background:#e2f0e6; color:#2f6f45; }
+  .pill.creeping { background:#f6ecd2; color:#8a6a14; }
+  .pill.blown { background:#f6e0dd; color:#8f3a33; }
+  .hero .big { font-size:30px; font-weight:700; margin:8px 0 2px; }
+  .hero .sub { color:var(--muted); font-size:14.5px; }
+  .req { display:flex; align-items:center; gap:12px; padding:11px 4px; border-bottom:1px solid #e4ecef; }
+  .req:last-child { border-bottom:0; }
+  .req .d { flex:1; font-size:15px; }
+  .req .c { color:var(--muted); font-size:13.5px; white-space:nowrap; }
+  .req button { font-size:12.5px; padding:7px 12px; }
+  .copied { color:#2f6f45; font-size:13px; margin-left:6px; }
+  .hidden { display:none; }
+  .empty { color:var(--muted); text-align:center; padding:16px 0; font-size:15px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ScopeGuard</h1>
+  <p class="tag">"Quick favor" is how fixed-price projects go bankrupt. ScopeGuard logs every out-of-scope request, prices it at your real rate, and writes the change-order email so you bill the creep instead of absorbing it.</p>
+
+  <div class="card">
+    <div class="row">
+      <div><label for="project">Project</label><input type="text" id="project" placeholder="Website redesign"></div>
+      <div><label for="client">Client</label><input type="text" id="client" placeholder="Dana"></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div><label for="price">Fixed price</label><input type="number" id="price" value="4000" min="0"></div>
+      <div><label for="rate">Your hourly rate</label><input type="number" id="rate" value="120" min="0"></div>
+      <button id="setupBtn">Save project</button>
+    </div>
+  </div>
+
+  <div class="card hero hidden" id="heroCard">
+    <span class="pill healthy" id="pill">on scope</span>
+    <div class="big" id="big">$0 of creep</div>
+    <div class="sub" id="sub">0% over the fixed price - 0 hrs of unbilled extras</div>
+  </div>
+
+  <div class="card hidden" id="addCard">
+    <div class="row">
+      <div style="flex:1;min-width:200px"><label for="desc">Change request</label><input type="text" id="desc" placeholder="add a blog section" style="width:100%"></div>
+      <div><label for="hours">Est. hours</label><input type="number" id="hours" value="2" min="0.5" step="0.5"></div>
+      <button id="addReq">Log it</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="reqCard"><div id="reqs"></div></div>
+  <div class="empty" id="empty">Set up the project, then log each "quick favor" as it arrives.</div>
+</div>
+<script src="engine.js"></script>
+<script>
+(function(){
+  var E = ScopeGuardEngine;
+  var KEY = 'scopeguard.v1';
+  var st = {project:'', client:'', price:4000, rate:120, requests:[]};
+  try { var s = JSON.parse(localStorage.getItem(KEY) || 'null'); if (s && s.requests) st = s; } catch(e){}
+  function save(){ try { localStorage.setItem(KEY, JSON.stringify(st)); } catch(e){} }
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  function render(){
+    $('project').value = st.project; $('client').value = st.client;
+    $('price').value = st.price; $('rate').value = st.rate;
+    var ready = st.project.trim().length > 0;
+    $('addCard').classList.toggle('hidden', !ready);
+    $('empty').classList.toggle('hidden', ready);
+    $('heroCard').classList.toggle('hidden', !ready);
+    $('reqCard').classList.toggle('hidden', !ready || st.requests.length === 0);
+    if (!ready) return;
+    var creep = E.creepCost(st.requests, st.rate);
+    var hours = E.creepHours(st.requests);
+    var pct = E.pctOver(creep, st.price);
+    var s = E.status(pct);
+    $('pill').className = 'pill ' + s.key;
+    $('pill').textContent = s.label;
+    $('big').textContent = E.money(creep) + ' of creep';
+    $('sub').textContent = Math.round(pct * 100) + '% over the fixed price - ' + E.fmtHours(hours) + ' of unbilled extras';
+    var html = '';
+    st.requests.forEach(function(r, i){
+      html += '<div class="req" data-i="' + i + '">' +
+        '<span class="d">' + esc(r.desc) + '</span>' +
+        '<span class="c">' + E.fmtHours(r.hours) + ' - ' + E.money(E.reqCost(r.hours, st.rate)) + '</span>' +
+        '<button class="ghost" data-act="co">Change order</button>' +
+        '<button class="ghost" data-act="billed">Billed</button>' +
+      '</div>';
+    });
+    $('reqs').innerHTML = html;
+  }
+
+  $('setupBtn').addEventListener('click', function(){
+    st.project = $('project').value.trim();
+    st.client = $('client').value.trim() || 'there';
+    st.price = parseFloat($('price').value) || 0;
+    st.rate = parseFloat($('rate').value) || 0;
+    save(); render();
+  });
+
+  $('addReq').addEventListener('click', function(){
+    var d = $('desc').value.trim();
+    var h = parseFloat($('hours').value);
+    if (!d || !(h > 0)) return;
+    st.requests.push({desc:d, hours:h});
+    $('desc').value = '';
+    save(); render();
+  });
+  $('desc').addEventListener('keydown', function(ev){ if (ev.key === 'Enter') $('addReq').click(); });
+
+  $('reqs').addEventListener('click', function(ev){
+    var btn = ev.target.closest('button'); if (!btn) return;
+    var row = ev.target.closest('.req'); if (!row) return;
+    var i = parseInt(row.getAttribute('data-i'), 10);
+    var r = st.requests[i]; if (!r) return;
+    if (btn.getAttribute('data-act') === 'billed'){ st.requests.splice(i, 1); save(); render(); return; }
+    var text = E.changeOrder(st.project, st.client, r.desc, r.hours, st.rate);
+    if (navigator.clipboard){
+      navigator.clipboard.writeText(text);
+      var c = document.createElement('span'); c.className = 'copied'; c.textContent = 'change order copied';
+      btn.parentNode.appendChild(c);
+      setTimeout(function(){ c.remove(); }, 1800);
+    }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
